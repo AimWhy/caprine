@@ -1,11 +1,12 @@
-import config from './config';
+import {ipcRenderer as ipc} from 'electron-better-ipc';
 import selectors from './browser/selectors';
 
 const conversationId = 'conversationWindow';
 const disabledVideoId = 'disabled_autoplay';
 
-export function toggleVideoAutoplay(): void {
-	if (config.get('autoplayVideos')) {
+export async function toggleVideoAutoplay(): Promise<void> {
+	const autoplayVideos = await ipc.callMain<undefined, boolean>('get-config-autoplayVideos');
+	if (autoplayVideos) {
 		// Stop the observers
 		conversationDivObserver.disconnect();
 		videoObserver.disconnect();
@@ -49,15 +50,15 @@ function disableVideoAutoplay(videos: NodeListOf<HTMLVideoElement>): void {
 		playIcon.setAttribute('id', disabledVideoId);
 
 		const {
-			style: {width, height}
+			style: {width, height},
 		} = firstParent;
 
 		const style = parentWithBackground.style || window.getComputedStyle(parentWithBackground);
-		const backgroundImageSrc = style.backgroundImage.slice(4, -1).replace(/"/g, '');
+		const backgroundImageSource = style.backgroundImage.slice(4, -1).replaceAll(/"/, '');
 
 		// Create the image to replace the video as a placeholder
 		const image = document.createElement('img');
-		image.setAttribute('src', backgroundImageSrc);
+		image.setAttribute('src', backgroundImageSource);
 		image.classList.add('disabledAutoPlayImgTopRadius');
 
 		// If it's a video without a source title bar at the bottom,
@@ -69,7 +70,7 @@ function disableVideoAutoplay(videos: NodeListOf<HTMLVideoElement>): void {
 		image.setAttribute('height', height);
 		image.setAttribute('width', width);
 
-		// Create a seperate instance of the play icon
+		// Create a separate instance of the play icon
 		// Clone the existing icon to get the original events
 		// Without creating a new icon, Messenger auto-hides the icon when scrolled to the video
 		const copiedPlayIcon = playIcon.cloneNode(true) as HTMLElement;
@@ -120,14 +121,14 @@ function getVideos(): NodeListOf<HTMLVideoElement> {
 function startConversationWindowObserver(): void {
 	conversationDivObserver.observe(document.documentElement, {
 		childList: true,
-		subtree: true
+		subtree: true,
 	});
 }
 
 function startVideoObserver(element: Element): void {
 	videoObserver.observe(element, {
 		childList: true,
-		subtree: true
+		subtree: true,
 	});
 }
 
@@ -138,9 +139,7 @@ const conversationDivObserver = new MutationObserver(_ => {
 	let conversation = document.querySelector(`#${conversationId}`);
 
 	// Fetch it using `querySelector` if no luck with the `conversationId`
-	if (!conversation) {
-		conversation = document.querySelector(selectors.conversationSelector);
-	}
+	conversation ||= document.querySelector(selectors.conversationSelector);
 
 	// If we have a new reference
 	if (conversation && conversationWindow !== conversation) {
@@ -152,7 +151,7 @@ const conversationDivObserver = new MutationObserver(_ => {
 	}
 });
 
-// Refence to mutation observer
+// Reference to mutation observer
 // Only active if the user has set option to disable video autoplay
 const videoObserver = new MutationObserver(_ => {
 	// Select by tag instead of iterating over mutations which is more performant

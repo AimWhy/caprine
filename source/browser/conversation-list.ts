@@ -1,19 +1,18 @@
 import {ipcRenderer as ipc} from 'electron-better-ipc';
-import elementReady = require('element-ready');
-import selectors from './selectors';
-import {isNewDesign} from '../browser';
+import elementReady from 'element-ready';
 import {isNull} from 'lodash';
+import selectors from './selectors';
 
 const icon = {
 	read: 'data-caprine-icon',
-	unread: 'data-caprine-icon-unread'
+	unread: 'data-caprine-icon-unread',
 };
 
 const padding = {
 	top: 3,
 	right: 0,
 	bottom: 3,
-	left: 0
+	left: 0,
 };
 
 function drawIcon(size: number, img?: HTMLImageElement): HTMLCanvasElement {
@@ -23,13 +22,13 @@ function drawIcon(size: number, img?: HTMLImageElement): HTMLCanvasElement {
 		canvas.width = size + padding.left + padding.right;
 		canvas.height = size + padding.top + padding.bottom;
 
-		const ctx = canvas.getContext('2d')!;
-		ctx.beginPath();
-		ctx.arc((size / 2) + padding.left, (size / 2) + padding.top, (size / 2), 0, Math.PI * 2, true);
-		ctx.closePath();
-		ctx.clip();
+		const context = canvas.getContext('2d')!;
+		context.beginPath();
+		context.arc((size / 2) + padding.left, (size / 2) + padding.top, (size / 2), 0, Math.PI * 2, true);
+		context.closePath();
+		context.clip();
 
-		ctx.drawImage(img, padding.left, padding.top, size, size);
+		context.drawImage(img, padding.left, padding.top, size, size);
 	} else {
 		canvas.width = 0;
 		canvas.height = 0;
@@ -64,38 +63,20 @@ async function createIcons(element: HTMLElement, url: string): Promise<void> {
 	element.setAttribute(icon.read, canvas.toDataURL());
 
 	const markerSize = 8;
-	const ctx = canvas.getContext('2d')!;
+	const context = canvas.getContext('2d')!;
 
-	ctx.fillStyle = '#f42020';
-	ctx.beginPath();
-	ctx.ellipse(canvas.width - markerSize, markerSize, markerSize, markerSize, 0, 0, 2 * Math.PI);
-	ctx.closePath();
-	ctx.fill();
+	context.fillStyle = '#f42020';
+	context.beginPath();
+	context.ellipse(canvas.width - markerSize, markerSize, markerSize, markerSize, 0, 0, 2 * Math.PI);
+	context.closePath();
+	context.fill();
 
 	element.setAttribute(icon.unread, canvas.toDataURL());
 }
 
-async function discoverIcons(isNewDesign: boolean, element: HTMLElement): Promise<void> {
-	if (isNewDesign) {
-		if (element) {
-			return createIcons(element, element.getAttribute('src')!);
-		}
-	} else {
-		const profilePicElement = element.querySelector<HTMLImageElement>('img:first-of-type');
-
-		if (profilePicElement) {
-			return createIcons(element, profilePicElement.src);
-		}
-
-		const groupPicElement = element.firstElementChild as (HTMLElement | null);
-
-		if (groupPicElement) {
-			const groupPicBackground = groupPicElement.style.backgroundImage;
-
-			if (groupPicBackground) {
-				return createIcons(element, groupPicBackground.replace(/^url\(["']?(.*?)["']?\)$/, '$1'));
-			}
-		}
+async function discoverIcons(element: HTMLElement): Promise<void> {
+	if (element) {
+		return createIcons(element, element.getAttribute('src')!);
 	}
 
 	console.warn('Could not discover profile picture. Falling back to default image.');
@@ -111,31 +92,16 @@ async function discoverIcons(isNewDesign: boolean, element: HTMLElement): Promis
 	return createIcons(element, 'https://facebook.com/favicon.ico');
 }
 
-async function getIcon(isNewDesign: boolean, element: HTMLElement, unread: boolean): Promise<string> {
+async function getIcon(element: HTMLElement, unread: boolean): Promise<string> {
 	if (element === null) {
 		return icon.read;
 	}
 
 	if (!element.getAttribute(icon.read)) {
-		await discoverIcons(isNewDesign, element);
+		await discoverIcons(element);
 	}
 
 	return element.getAttribute(unread ? icon.unread : icon.read)!;
-}
-
-async function createConversation(element: HTMLElement): Promise<Conversation> {
-	const conversation: Partial<Conversation> = {};
-	const muted = element.classList.contains('_569x');
-
-	conversation.selected = element.classList.contains('_1ht2');
-	conversation.unread = !muted && element.getAttribute('aria-live') !== null;
-
-	const profileElement = element.querySelector<HTMLElement>('div[data-tooltip-content]')!;
-
-	conversation.label = profileElement.getAttribute('data-tooltip-content')!;
-	conversation.icon = await getIcon(false, profileElement, conversation.unread);
-
-	return conversation as Conversation;
 }
 
 async function getLabel(element: HTMLElement): Promise<string> {
@@ -145,8 +111,8 @@ async function getLabel(element: HTMLElement): Promise<string> {
 
 	const emojis: HTMLElement[] = [];
 	if (element !== null) {
-		for (const element_curr of element.children) {
-			emojis.push(element_curr as HTMLElement);
+		for (const elementCurrent of element.children) {
+			emojis.push(elementCurrent as HTMLElement);
 		}
 	}
 
@@ -171,16 +137,16 @@ async function createConversationNewDesign(element: HTMLElement): Promise<Conver
 	conversation.label = await getLabel(unparsedLabel);
 
 	const iconElement = element.querySelector<HTMLElement>('img')!;
-	conversation.icon = await getIcon(true, iconElement, conversation.unread);
+	conversation.icon = await getIcon(iconElement, conversation.unread);
 
 	return conversation as Conversation;
 }
 
-async function createConversationList(isNewDesign: boolean): Promise<Conversation[]> {
-	const conversationListSelector = isNewDesign ? selectors.conversationListNewDesign : selectors.conversationList;
+async function createConversationList(): Promise<Conversation[]> {
+	const conversationListSelector = selectors.conversationList;
 
-	const list = await elementReady<HTMLElement>(conversationListSelector, {
-		stopOnDomReady: false
+	const list = await elementReady(conversationListSelector, {
+		stopOnDomReady: false,
 	});
 
 	if (!list) {
@@ -190,53 +156,97 @@ async function createConversationList(isNewDesign: boolean): Promise<Conversatio
 
 	const elements: HTMLElement[] = [...list.children] as HTMLElement[];
 
-	if (isNewDesign) {
-		// Remove last element from childer list on new design
-		elements.splice(-1, 1);
-	}
+	// Remove last element from childer list
+	elements.splice(-1, 1);
 
-	const conversations: Conversation[] = await Promise.all(elements.map(async element => isNewDesign ? createConversationNewDesign(element) : createConversation(element)));
+	const conversations: Conversation[] = await Promise.all(elements.map(async element => createConversationNewDesign(element)));
 
 	return conversations;
 }
 
-export async function sendConversationList(isNewDesign: boolean): Promise<void> {
-	const conversationsToRender: Conversation[] = await createConversationList(isNewDesign);
+export async function sendConversationList(): Promise<void> {
+	const conversationsToRender: Conversation[] = await createConversationList();
 	ipc.callMain('conversations', conversationsToRender);
 }
 
-function countUnread(mutationsList: MutationRecord[]): void {
-	// Look through the mutations for the one with the unread dot
-	const unreadMutations = mutationsList.filter(mutation => mutation.type === 'childList' && mutation.addedNodes.length > 0 && ((mutation.addedNodes[0] as Element).getAttribute('aria-label') === 'Mark as read'));
+function generateStringFromNode(element: Element): string | undefined {
+	const cloneElement = element.cloneNode(true) as Element;
+	let emojiString;
 
-	for (const mutation of unreadMutations) {
-		let curr = (mutation.addedNodes[0] as Element).parentElement;
-		// Find the parent element with the message preview and sender
-		while (curr?.className !== 'rq0escxv l9j0dhe7 du4w35lb j83agx80 pfnyh3mw i1fnvgqd bp9cbjyn owycx6da btwxx1t3') {
-			curr = curr?.parentElement ?? null;
+	const images = cloneElement.querySelectorAll('img');
+	for (const image of images) {
+		emojiString = image.alt;
+		// Replace facebook's thumbs up with emoji
+		if (emojiString === '(Y)' || emojiString === '(y)') {
+			emojiString = '👍';
 		}
+
+		image.parentElement?.replaceWith(document.createTextNode(emojiString));
+	}
+
+	return cloneElement.textContent ?? undefined;
+}
+
+function countUnread(mutationsList: MutationRecord[]): void {
+	const alreadyChecked: string[] = [];
+
+	const unreadMutations = mutationsList.filter(mutation =>
+		// When a conversations "becomes unread".
+		(
+			mutation.type === 'childList'
+			&& mutation.addedNodes.length > 0
+			&& ((mutation.addedNodes[0] as Element).className === selectors.conversationSidebarUnreadDot)
+		)
+		// When text is received
+		|| (
+			mutation.type === 'characterData'
+			// Make sure the text corresponds to a conversation
+			&& mutation.target.parentElement?.parentElement?.parentElement?.className === selectors.conversationSidebarTextParent
+		)
+		// When an emoji is received, node(s) are added
+		|| (
+			mutation.type === 'childList'
+			// Make sure the mutation corresponds to a conversation
+			&& mutation.target.parentElement?.parentElement?.className === selectors.conversationSidebarTextParent
+		)
+		// Emoji change
+		|| (
+			mutation.type === 'attributes'
+			&& mutation.target.parentElement?.parentElement?.parentElement?.parentElement?.className === selectors.conversationSidebarTextParent
+		));
+
+	// Check latest mutation first
+	for (const mutation of unreadMutations.reverse()) {
+		const current = (mutation.target.parentElement as Element).closest(selectors.conversationSidebarSelector)!;
+
+		const href = current.closest('[role="link"]')?.getAttribute('href');
+
+		if (!href) {
+			continue;
+		}
+
+		// It is possible to have multiple mutations for the same conversation, but we only want one notification.
+		// So if the current conversation has already been checked, continue.
+		// Additionally if the conversation is not unread, then also continue.
+		if (alreadyChecked.includes(href) || !current.querySelector('.' + selectors.conversationSidebarUnreadDot.replaceAll(/ /, '.'))) {
+			continue;
+		}
+
+		alreadyChecked.push(href);
 
 		// Get the image data URI from the parent of the author/text
-		const imgUrl = curr.parentElement?.getElementsByTagName('img')[0].getAttribute('data-caprine-icon');
+		const imgUrl = current.querySelector('img')?.dataset.caprineIcon;
+		const textOptions = current.querySelectorAll(selectors.conversationSidebarTextSelector);
 		// Get the author and text of the new message
-		// const titleText = curr.querySelectorAll('.d2edcug0.hpfvmrgz.qv66sw1b.c1et5uql.b0tq1wua.jq4qci2q.a3bd9o3v.lrazzd5p.oo9gr5id')[0].textContent;
-		let titleTextOptions = curr.querySelectorAll('.a8c37x1j.d2edcug0.ni8dbmo4.ltmttdrg.g0qnabr5');
-		if (titleTextOptions.length === 0) {
-			titleTextOptions = curr.querySelectorAll('.a8c37x1j.ni8dbmo4.stjgntxs.l9j0dhe7.ltmttdrg.g0qnabr5');
-		}
+		const titleTextNode = textOptions[0];
+		const bodyTextNode = textOptions[1];
 
-		const titleText = titleTextOptions[0].textContent;
-		let bodyTextOptions = curr.querySelectorAll('.a8c37x1j.ni8dbmo4.stjgntxs.l9j0dhe7.ltmttdrg.g0qnabr5');
-		if (bodyTextOptions.length === 0) {
-			bodyTextOptions = curr.querySelectorAll('.a8c37x1j.d2edcug0.ni8dbmo4.ltmttdrg.g0qnabr5');
-		}
+		const titleText = generateStringFromNode(titleTextNode);
+		const bodyText = generateStringFromNode(bodyTextNode);
 
-		let loc = 0;
-		if (bodyTextOptions.length >= 2) {
-			loc = 1;
+		if (!bodyText || !titleText || !imgUrl) {
+			continue;
 		}
-
-		const bodyText = bodyTextOptions[loc].textContent;
 
 		// Send a notification
 		ipc.callMain('notification', {
@@ -244,31 +254,61 @@ function countUnread(mutationsList: MutationRecord[]): void {
 			title: titleText,
 			body: bodyText,
 			icon: imgUrl,
-			silent: false
+			silent: false,
 		});
 	}
 }
 
+async function updateTrayIcon(): Promise<void> {
+	let messageCount = 0;
+
+	await elementReady(selectors.chatsIcon, {stopOnDomReady: false});
+
+	// Count unread messages in Chats, Marketplace, etc.
+	for (const element of document.querySelectorAll<HTMLElement>(selectors.chatsIcon)) {
+		// Extract messageNumber from ariaLabel
+		const messageNumber = element?.ariaLabel?.match(/\d+/g);
+
+		if (messageNumber) {
+			messageCount += Number.parseInt(messageNumber[0], 10);
+		}
+	}
+
+	ipc.callMain('update-tray-icon', messageCount);
+}
+
 window.addEventListener('load', async () => {
-	const sidebar = await elementReady<HTMLElement>('[role=navigation]', {stopOnDomReady: false});
-	const newDesign = await isNewDesign();
+	const sidebar = await elementReady('[role=navigation]:has([role=grid])', {stopOnDomReady: false});
+	const leftSidebar = await elementReady(`${selectors.leftSidebar}:has(${selectors.chatsIcon})`, {stopOnDomReady: false});
 
 	if (sidebar) {
-		const conversationListObserver = new MutationObserver(async () => sendConversationList(newDesign));
+		const conversationListObserver = new MutationObserver(async () => sendConversationList());
 		const conversationCountObserver = new MutationObserver(countUnread);
 
 		conversationListObserver.observe(sidebar, {
 			subtree: true,
 			childList: true,
 			attributes: true,
-			attributeFilter: ['class']
+			attributeFilter: ['class'],
 		});
 
 		conversationCountObserver.observe(sidebar, {
+			characterData: true,
 			subtree: true,
 			childList: true,
 			attributes: true,
-			attributeFilter: ['class']
+			attributeFilter: ['src', 'alt'],
+		});
+	}
+
+	if (leftSidebar) {
+		const chatsIconObserver = new MutationObserver(async () => updateTrayIcon());
+
+		chatsIconObserver.observe(leftSidebar, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			attributeFilter: ['aria-label'],
 		});
 	}
 });

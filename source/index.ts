@@ -1,5 +1,5 @@
-import * as path from 'path';
-import {readFileSync, existsSync} from 'fs';
+import path from 'node:path';
+import {readFileSync, existsSync} from 'node:fs';
 import {
 	app,
 	nativeImage,
@@ -10,47 +10,53 @@ import {
 	Menu,
 	Notification,
 	MenuItemConstructorOptions,
-	systemPreferences
+	systemPreferences,
+	nativeTheme,
 } from 'electron';
-import {ipcMain} from 'electron-better-ipc';
+import {ipcMain as ipc} from 'electron-better-ipc';
 import {autoUpdater} from 'electron-updater';
-import electronDl = require('electron-dl');
-import electronContextMenu = require('electron-context-menu');
-import electronLocalshortcut = require('electron-localshortcut');
-import electronDebug = require('electron-debug');
+import electronDl from 'electron-dl';
+import electronContextMenu from 'electron-context-menu';
+import electronLocalshortcut from 'electron-localshortcut';
+import electronDebug from 'electron-debug';
 import {is, darkMode} from 'electron-util';
 import {bestFacebookLocaleFor} from 'facebook-locales';
-import doNotDisturb = require('@sindresorhus/do-not-disturb');
+import doNotDisturb from '@sindresorhus/do-not-disturb';
 import updateAppMenu from './menu';
-import config from './config';
+import config, {StoreType} from './config';
 import tray from './tray';
-import {sendAction, sendBackgroundAction, messengerDomain, stripTrackingFromUrl} from './util';
+import {
+	sendAction,
+	sendBackgroundAction,
+	messengerDomain,
+	stripTrackingFromUrl,
+} from './util';
 import {process as processEmojiUrl} from './emoji';
 import ensureOnline from './ensure-online';
 import {setUpMenuBarMode} from './menu-bar-mode';
 import {caprineIconPath} from './constants';
 
-ipcMain.setMaxListeners(100);
+ipc.setMaxListeners(100);
 
 electronDebug({
 	isEnabled: true, // TODO: This is only enabled to allow `Command+R` because messenger.com sometimes gets stuck after computer waking up
-	showDevTools: false
+	showDevTools: false,
 });
 
 electronDl();
 electronContextMenu({
 	showCopyImageAddress: true,
-	prepend: defaultActions => {
+	prepend(defaultActions) {
 		/*
 		TODO: Use menu option or use replacement of options (https://github.com/sindresorhus/electron-context-menu/issues/70)
 		See explanation for this hacky solution here: https://github.com/sindresorhus/caprine/pull/1169
 		*/
 		defaultActions.copyLink({
-			transform: stripTrackingFromUrl
+			transform: stripTrackingFromUrl,
 		});
 
 		return [];
-	}
+	},
 });
 
 app.setAppUserModelId('com.sindresorhus.caprine');
@@ -59,14 +65,14 @@ if (!config.get('hardwareAcceleration')) {
 	app.disableHardwareAcceleration();
 }
 
-if (!is.development && !is.linux) {
+if (!is.development && config.get('autoUpdate')) {
 	(async () => {
 		const FOUR_HOURS = 1000 * 60 * 60 * 4;
 		setInterval(async () => {
-			await autoUpdater.checkForUpdates();
+			await autoUpdater.checkForUpdatesAndNotify();
 		}, FOUR_HOURS);
 
-		await autoUpdater.checkForUpdates();
+		await autoUpdater.checkForUpdatesAndNotify();
 	})();
 }
 
@@ -98,35 +104,24 @@ app.on('ready', () => {
 	});
 });
 
-function getMessageCount(conversations: Conversation[]): number {
-	return conversations.filter(({unread}) => unread).length;
-}
-
-async function updateBadge(conversations: Conversation[]): Promise<void> {
-	// Ignore `Sindre messaged you` blinking
-	if (!Array.isArray(conversations)) {
-		return;
-	}
-
-	const messageCount = getMessageCount(conversations);
-
-	if (is.macos || is.linux) {
+async function updateBadge(messageCount: number): Promise<void> {
+	if (!is.windows) {
 		if (config.get('showUnreadBadge') && !isDNDEnabled) {
 			app.badgeCount = messageCount;
 		}
 
 		if (
-			is.macos &&
-			!isDNDEnabled &&
-			config.get('bounceDockOnMessage') &&
-			previousMessageCount !== messageCount
+			is.macos
+			&& !isDNDEnabled
+			&& config.get('bounceDockOnMessage')
+			&& previousMessageCount !== messageCount
 		) {
 			app.dock.bounce('informational');
 			previousMessageCount = messageCount;
 		}
 	}
 
-	if (is.linux || is.windows) {
+	if (!is.macos) {
 		if (config.get('showUnreadBadge')) {
 			tray.setBadge(messageCount > 0);
 		}
@@ -143,7 +138,7 @@ async function updateBadge(conversations: Conversation[]): Promise<void> {
 			mainWindow.setOverlayIcon(null, '');
 		} else {
 			// Delegate drawing of overlay icon to renderer process
-			updateOverlayIcon(await ipcMain.callRenderer(mainWindow, 'render-overlay-icon', messageCount));
+			updateOverlayIcon(await ipc.callRenderer(mainWindow, 'render-overlay-icon', messageCount));
 		}
 	}
 }
@@ -153,22 +148,12 @@ function updateOverlayIcon({data, text}: {data: string; text: string}): void {
 	mainWindow.setOverlayIcon(img, text);
 }
 
-function updateTrayIcon(): void {
-	if (!config.get('showTrayIcon') || config.get('quitOnWindowClose')) {
-		tray.destroy();
-	} else {
-		tray.create(mainWindow);
-	}
-}
-
-ipcMain.answerRenderer('update-tray-icon', updateTrayIcon);
-
-interface BeforeSendHeadersResponse {
+type BeforeSendHeadersResponse = {
 	cancel?: boolean;
 	requestHeaders?: Record<string, string>;
-}
+};
 
-interface OnSendHeadersDetails {
+type OnSendHeadersDetails = {
 	id: number;
 	url: string;
 	method: string;
@@ -177,11 +162,11 @@ interface OnSendHeadersDetails {
 	referrer: string;
 	timestamp: number;
 	requestHeaders: Record<string, string>;
-}
+};
 
 function enableHiresResources(): void {
 	const scaleFactor = Math.max(
-		...electronScreen.getAllDisplays().map(display => display.scaleFactor)
+		...electronScreen.getAllDisplays().map(display => display.scaleFactor),
 	);
 
 	if (scaleFactor === 1) {
@@ -203,9 +188,9 @@ function enableHiresResources(): void {
 
 			callback({
 				cancel: false,
-				requestHeaders: details.requestHeaders
+				requestHeaders: details.requestHeaders,
 			});
-		}
+		},
 	);
 }
 
@@ -217,8 +202,8 @@ function initRequestsFiltering(): void {
 			`*://*.${messengerDomain}/*delivery_receipts*`, // Delivery receipts indicator blocker
 			`*://*.${messengerDomain}/*unread_threads*`, // Delivery receipts indicator blocker
 			'*://*.fbcdn.net/images/emoji.php/v9/*', // Emoji
-			'*://*.facebook.com/images/emoji.php/v9/*' // Emoji
-		]
+			'*://*.facebook.com/images/emoji.php/v9/*', // Emoji
+		],
 	};
 
 	session.defaultSession.webRequest.onBeforeRequest(filter, async ({url}, callback) => {
@@ -234,7 +219,7 @@ function initRequestsFiltering(): void {
 	});
 
 	session.defaultSession.webRequest.onHeadersReceived({
-		urls: ['*://static.xx.fbcdn.net/rsrc.php/*']
+		urls: ['*://static.xx.fbcdn.net/rsrc.php/*'],
 	}, ({responseHeaders}, callback) => {
 		if (!config.get('callRingtoneMuted') || !responseHeaders) {
 			callback({});
@@ -243,7 +228,7 @@ function initRequestsFiltering(): void {
 
 		const callRingtoneHash = '2NAu/QVqg211BbktgY5GkA==';
 		callback({
-			cancel: responseHeaders['content-md5'][0] === callRingtoneHash
+			cancel: responseHeaders['content-md5'][0] === callRingtoneHash,
 		});
 	});
 }
@@ -254,7 +239,7 @@ function setUserLocale(): void {
 		url: 'https://www.messenger.com/',
 		name: 'locale',
 		secure: true,
-		value: userLocale
+		value: userLocale,
 	};
 
 	session.defaultSession.cookies.set(cookie);
@@ -262,7 +247,7 @@ function setUserLocale(): void {
 
 function setNotificationsMute(status: boolean): void {
 	const label = 'Mute Notifications';
-	const muteMenuItem = Menu.getApplicationMenu()!.getMenuItemById('mute-notifications');
+	const muteMenuItem = Menu.getApplicationMenu()!.getMenuItemById('mute-notifications')!;
 
 	config.set('notificationsMuted', status);
 	muteMenuItem.checked = status;
@@ -277,9 +262,9 @@ function createMainWindow(): BrowserWindow {
 	const lastWindowState = config.get('lastWindowState');
 
 	// Messenger or Work Chat
-	const mainURL = config.get('useWorkChat') ?
-		'https://work.facebook.com/chat' :
-		'https://www.messenger.com/login/';
+	const mainURL = config.get('useWorkChat')
+		? 'https://work.facebook.com/chat'
+		: 'https://www.messenger.com/login/';
 
 	const win = new BrowserWindow({
 		title: app.name,
@@ -293,16 +278,22 @@ function createMainWindow(): BrowserWindow {
 		minHeight: 200,
 		alwaysOnTop: config.get('alwaysOnTop'),
 		titleBarStyle: 'hiddenInset',
+		trafficLightPosition: {
+			x: 80,
+			y: 20,
+		},
 		autoHideMenuBar: config.get('autoHideMenuBar'),
 		webPreferences: {
 			preload: path.join(__dirname, 'browser.js'),
-			nativeWindowOpen: true,
 			contextIsolation: true,
+			nodeIntegration: true,
 			spellcheck: config.get('isSpellCheckerEnabled'),
 			plugins: true,
-			enableRemoteModule: true
-		}
+		},
 	});
+
+	require('@electron/remote/main').initialize();
+	require('@electron/remote/main').enable(win.webContents);
 
 	setUserLocale();
 	initRequestsFiltering();
@@ -376,7 +367,7 @@ function createMainWindow(): BrowserWindow {
 
 (async () => {
 	await Promise.all([ensureOnline(), app.whenReady()]);
-	await updateAppMenu({isNewDesign: false});
+	await updateAppMenu();
 	mainWindow = createMainWindow();
 
 	// Workaround for https://github.com/electron/electron/issues/5256
@@ -393,9 +384,8 @@ function createMainWindow(): BrowserWindow {
 			type: 'checkbox',
 			checked: config.get('notificationsMuted'),
 			async click() {
-				const isNewDesign = await ipcMain.callRenderer<undefined, boolean>(mainWindow, 'check-new-ui');
-				setNotificationsMute(await ipcMain.callRenderer(mainWindow, 'toggle-mute-notifications', {isNewDesign}));
-			}
+				setNotificationsMute(await ipc.callRenderer(mainWindow, 'toggle-mute-notifications'));
+			},
 		};
 
 		dockMenu = Menu.buildFromTemplate([firstItem]);
@@ -406,35 +396,33 @@ function createMainWindow(): BrowserWindow {
 			app.dock.show();
 		}
 
-		ipcMain.once('conversations', () => {
+		ipc.once('conversations', () => {
 			// Messenger sorts the conversations by unread state.
 			// We select the first conversation from the list.
 			sendAction('jump-to-conversation', 1);
 		});
 
-		ipcMain.answerRenderer('conversations', (conversations: Conversation[]) => {
+		ipc.answerRenderer('conversations', (conversations: Conversation[]) => {
 			if (conversations.length === 0) {
 				return;
 			}
 
-			const items = conversations.map(({label, icon}, index) => {
-				return {
-					label: `${label}`,
-					icon: nativeImage.createFromDataURL(icon),
-					click: () => {
-						mainWindow.show();
-						sendAction('jump-to-conversation', index + 1);
-					}
-				};
-			});
+			const items = conversations.map(({label, icon}, index) => ({
+				label: `${label}`,
+				icon: nativeImage.createFromDataURL(icon),
+				click() {
+					mainWindow.show();
+					sendAction('jump-to-conversation', index + 1);
+				},
+			}));
 
 			app.dock.setMenu(Menu.buildFromTemplate([firstItem, {type: 'separator'}, ...items]));
 		});
 	}
 
 	// Update badge on conversations change
-	ipcMain.answerRenderer('conversations', async (conversations: Conversation[]) => {
-		updateBadge(conversations);
+	ipc.answerRenderer('update-tray-icon', async (messageCount: number) => {
+		updateBadge(messageCount);
 	});
 
 	enableHiresResources();
@@ -442,15 +430,14 @@ function createMainWindow(): BrowserWindow {
 	const {webContents} = mainWindow;
 
 	webContents.on('dom-ready', async () => {
-		const isNewDesign = await ipcMain.callRenderer<undefined, boolean>(mainWindow, 'check-new-ui');
+		// Set window title to Caprine
+		mainWindow.setTitle(app.name);
 
-		await updateAppMenu({isNewDesign});
+		await updateAppMenu();
 
-		const files = ['browser.css', 'dark-mode.css', 'vibrancy.css', 'code-blocks.css', 'autoplay.css'];
+		const files = ['browser.css', 'dark-mode.css', 'vibrancy.css', 'code-blocks.css', 'autoplay.css', 'scrollbar.css'];
 
-		const cssPath = isNewDesign ?
-			path.join(__dirname, '..', 'css', 'new-design') :
-			path.join(__dirname, '..', 'css');
+		const cssPath = path.join(__dirname, '..', 'css');
 
 		for (const file of files) {
 			if (existsSync(path.join(cssPath, file))) {
@@ -460,7 +447,7 @@ function createMainWindow(): BrowserWindow {
 
 		if (config.get('useWorkChat') && existsSync(path.join(cssPath, 'workchat.css'))) {
 			webContents.insertCSS(
-				readFileSync(path.join(cssPath, 'workchat.css'), 'utf8')
+				readFileSync(path.join(cssPath, 'workchat.css'), 'utf8'),
 			);
 		}
 
@@ -480,10 +467,10 @@ function createMainWindow(): BrowserWindow {
 		}
 
 		if (is.macos) {
-			ipcMain.answerRenderer('update-dnd-mode', async (initialSoundsValue: boolean) => {
+			ipc.answerRenderer('update-dnd-mode', async (initialSoundsValue: boolean) => {
 				doNotDisturb.on('change', (doNotDisturb: boolean) => {
 					isDNDEnabled = doNotDisturb;
-					ipcMain.callRenderer(mainWindow, 'toggle-sounds', {isNewDesign, checked: isDNDEnabled ? false : initialSoundsValue});
+					ipc.callRenderer(mainWindow, 'toggle-sounds', {checked: isDNDEnabled ? false : initialSoundsValue});
 				});
 
 				isDNDEnabled = await doNotDisturb.isEnabled();
@@ -492,41 +479,53 @@ function createMainWindow(): BrowserWindow {
 			});
 		}
 
-		setNotificationsMute(await ipcMain.callRenderer(mainWindow, 'toggle-mute-notifications', {
-			isNewDesign,
-			defaultStatus: config.get('notificationsMuted')
+		setNotificationsMute(await ipc.callRenderer(mainWindow, 'toggle-mute-notifications', {
+			defaultStatus: config.get('notificationsMuted'),
 		}));
 
-		ipcMain.callRenderer(mainWindow, 'toggle-message-buttons', config.get('showMessageButtons'));
+		ipc.callRenderer(mainWindow, 'toggle-message-buttons', config.get('showMessageButtons'));
 
 		await webContents.executeJavaScript(
-			readFileSync(path.join(__dirname, 'notifications-isolated.js'), 'utf8')
+			readFileSync(path.join(__dirname, 'notifications-isolated.js'), 'utf8'),
 		);
 
 		if (is.macos) {
-			// eslint-disable-next-line node/no-unsupported-features/es-syntax
 			await import('./touch-bar');
 		}
 	});
 
-	// eslint-disable-next-line max-params
-	webContents.on('new-window', async (event: Event, url, frameName, _disposition, options) => {
-		event.preventDefault();
-
-		if (url === 'about:blank' || url === 'about:blank#blocked') {
-			if (frameName !== 'about:blank') {
-				// Voice/video call popup
-				options.show = true;
-				options.titleBarStyle = 'default';
-				options.webPreferences = options.webPreferences ?? {};
-				options.webPreferences.nodeIntegration = false;
-				options.webPreferences.preload = path.join(__dirname, 'browser-call.js');
-				(event as any).newGuest = new BrowserWindow(options);
-			}
-		} else {
-			url = stripTrackingFromUrl(url);
-			await shell.openExternal(url);
+	webContents.setWindowOpenHandler(details => {
+		if (details.disposition === 'foreground-tab' || details.disposition === 'background-tab') {
+			const url = stripTrackingFromUrl(details.url);
+			shell.openExternal(url);
+			return {action: 'deny'};
 		}
+
+		if (details.disposition === 'new-window') {
+			if (details.url === 'about:blank' || details.url === 'about:blank#blocked') {
+				if (details.frameName !== 'about:blank') {
+					// Voice/video call popup
+					return {
+						action: 'allow',
+						overrideBrowserWindowOptions: {
+							show: true,
+							titleBarStyle: 'default',
+							webPreferences: {
+								nodeIntegration: false,
+								preload: path.join(__dirname, 'browser-call.js'),
+							},
+						},
+					};
+				}
+			} else {
+				const url = stripTrackingFromUrl(details.url);
+				shell.openExternal(url);
+			}
+
+			return {action: 'deny'};
+		}
+
+		return {action: 'allow'};
 	});
 
 	webContents.on('will-navigate', async (event, url) => {
@@ -550,8 +549,8 @@ function createMainWindow(): BrowserWindow {
 			if (
 				// Example: https://company-name.facebook.com/login or
 				//   		https://company-name.workplace.com/login
-				(hostname.endsWith('.facebook.com') || hostname.endsWith('.workplace.com')) &&
-				(pathname.startsWith('/login') || pathname.startsWith('/chat'))
+				(hostname.endsWith('.facebook.com') || hostname.endsWith('.workplace.com'))
+				&& (pathname.startsWith('/login') || pathname.startsWith('/chat'))
 			) {
 				return true;
 			}
@@ -573,7 +572,7 @@ function createMainWindow(): BrowserWindow {
 })();
 
 if (is.macos) {
-	ipcMain.answerRenderer('set-vibrancy', () => {
+	ipc.answerRenderer('set-vibrancy', () => {
 		mainWindow.setBackgroundColor('#80FFFFFF'); // Transparent, workaround for vibrancy issue.
 		mainWindow.setVibrancy('sidebar');
 	});
@@ -587,7 +586,7 @@ function toggleMaximized(): void {
 	}
 }
 
-ipcMain.answerRenderer('titlebar-doubleclick', () => {
+ipc.answerRenderer('titlebar-doubleclick', () => {
 	if (is.macos) {
 		const doubleClickAction = systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string');
 
@@ -620,15 +619,20 @@ app.on('before-quit', () => {
 
 const notifications = new Map();
 
-ipcMain.answerRenderer(
+ipc.answerRenderer(
 	'notification',
 	({id, title, body, icon, silent}: {id: number; title: string; body: string; icon: string; silent: boolean}) => {
+		// Don't send notifications when the window is focused
+		if (mainWindow.isFocused()) {
+			return;
+		}
+
 		const notification = new Notification({
 			title,
 			body: config.get('notificationMessagePreview') ? body : 'You have a new message',
 			hasReply: true,
 			icon: nativeImage.createFromDataURL(icon),
-			silent
+			silent,
 		});
 
 		notifications.set(id, notification);
@@ -652,5 +656,27 @@ ipcMain.answerRenderer(
 		});
 
 		notification.show();
-	}
+	},
 );
+
+type ThemeSource = typeof nativeTheme.themeSource;
+
+ipc.answerRenderer<undefined, StoreType['useWorkChat']>('get-config-useWorkChat', async () => config.get('useWorkChat'));
+ipc.answerRenderer<undefined, StoreType['showMessageButtons']>('get-config-showMessageButtons', async () => config.get('showMessageButtons'));
+ipc.answerRenderer<undefined, ThemeSource>('get-config-theme', async () => config.get('theme'));
+ipc.answerRenderer<undefined, StoreType['privateMode']>('get-config-privateMode', async () => config.get('privateMode'));
+ipc.answerRenderer<undefined, StoreType['vibrancy']>('get-config-vibrancy', async () => config.get('vibrancy'));
+ipc.answerRenderer<undefined, StoreType['sidebar']>('get-config-sidebar', async () => config.get('sidebar'));
+ipc.answerRenderer<undefined, StoreType['zoomFactor']>('get-config-zoomFactor', async () => config.get('zoomFactor'));
+ipc.answerRenderer<StoreType['zoomFactor'], void>('set-config-zoomFactor', async zoomFactor => {
+	config.set('zoomFactor', zoomFactor);
+});
+ipc.answerRenderer<undefined, StoreType['keepMeSignedIn']>('get-config-keepMeSignedIn', async () => config.get('keepMeSignedIn'));
+ipc.answerRenderer<StoreType['keepMeSignedIn'], void>('set-config-keepMeSignedIn', async keepMeSignedIn => {
+	config.set('keepMeSignedIn', keepMeSignedIn);
+});
+ipc.answerRenderer<undefined, StoreType['autoplayVideos']>('get-config-autoplayVideos', async () => config.get('autoplayVideos'));
+ipc.answerRenderer<undefined, StoreType['emojiStyle']>('get-config-emojiStyle', async () => config.get('emojiStyle'));
+ipc.answerRenderer<StoreType['emojiStyle'], void>('set-config-emojiStyle', async emojiStyle => {
+	config.set('emojiStyle', emojiStyle);
+});
